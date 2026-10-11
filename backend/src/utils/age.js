@@ -291,6 +291,8 @@ function validateRecipient(recipient) {
 }
 
 async function validateIdentity(identity) {
+    assertAgeRuntimeAvailable();
+
     const key = normalizeKey(identity);
 
     if (

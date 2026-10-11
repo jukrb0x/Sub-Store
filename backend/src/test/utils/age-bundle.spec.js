@@ -104,4 +104,37 @@ describe('age bundle compatibility', function () {
         expect(pair['age-secret-key']).to.match(/^AGE-SECRET-KEY-1/);
         expect(pair['age-public-key']).to.match(/^age1/);
     });
+    for (const runtime of ['missing subtle', 'unsupported X25519']) {
+        it(`validates an imported identity in a fresh runtime with ${runtime}`, async function () {
+            const generator = await loadAgeBundle(webcrypto);
+            const pair = await generator.generateKeyPair('x25519');
+            const crypto = {
+                getRandomValues: webcrypto.getRandomValues.bind(webcrypto),
+            };
+            if (runtime === 'unsupported X25519') {
+                crypto.subtle = {
+                    importKey: async () => {
+                        throw new TypeError('Algorithm not supported');
+                    },
+                    deriveBits: async () => {
+                        throw new TypeError('Algorithm not supported');
+                    },
+                };
+            }
+            // Saving settings runs in a new Loon script context, independently
+            // of the context that generated the identity.
+            const age = await loadAgeBundle(crypto);
+            const config = { 'age-secret-key': pair['age-secret-key'] };
+            await age.normalizeAgeSecretKeyConfig(config);
+            expect(config['age-secret-key']).to.equal(pair['age-secret-key']);
+
+            let error;
+            try {
+                await age.validateIdentity(pair['age-secret-key'].slice(0, -1));
+            } catch (caught) {
+                error = caught;
+            }
+            expect(error?.code).to.equal('INVALID_AGE_SECRET_KEY');
+        });
+    }
 });
