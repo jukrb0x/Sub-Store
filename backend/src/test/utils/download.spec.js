@@ -32,6 +32,7 @@ let activeRequests;
 let maxActiveRequests;
 let requestDelay;
 let responseBody;
+let responseStatus;
 let ageUtils;
 
 function sleep(ms) {
@@ -93,6 +94,7 @@ describe('download github proxy regex', function () {
         maxActiveRequests = 0;
         requestDelay = 0;
         responseBody = 'test-body';
+        responseStatus = 200;
         state = {
             [SETTINGS_KEY]: {
                 githubProxy: 'https://ghproxy.test',
@@ -135,7 +137,7 @@ describe('download github proxy regex', function () {
                 return {
                     body: responseBody,
                     headers: {},
-                    statusCode: 200,
+                    statusCode: responseStatus,
                 };
             },
         });
@@ -144,6 +146,42 @@ describe('download github proxy regex', function () {
         headersResourceCache.revokeAll();
     });
 
+    it('tracks actual success and 403 fallback without moving last success', async function () {
+        const url='https://example.com/private-token#cacheKey=monitor&trackStatus=true';
+        expect(await download(url,undefined,undefined,undefined,undefined,undefined,true)).to.equal('test-body');
+        const read=()=>JSON.parse(state['#sub-store-refresh-status-monitor']);
+        const success=read();
+        expect(success.lastAttemptResult).to.equal('success');
+        expect(success.usedOldCache).to.equal(false);
+        expect(success.lastSuccessAt).to.be.a('number');
+        responseStatus=403;
+        expect(await download(url,undefined,undefined,undefined,undefined,undefined,true)).to.equal('test-body');
+        const failure=read();
+        expect(failure.lastAttemptResult).to.equal('failed');
+        expect(failure.lastError).to.equal('HTTP 403');
+        expect(failure.usedOldCache).to.equal(true);
+        expect(failure.lastSuccessAt).to.equal(success.lastSuccessAt);
+        expect(JSON.stringify(failure)).not.to.include('private-token');
+        expect(capturedUrls).to.have.length(2);
+    });
+    it('records first-use failure without claiming fallback or a successful time', async function () {
+        responseStatus=503;
+        try { await download('https://example.com/empty#cacheKey=empty&trackStatus=true'); expect.fail('must fail'); } catch (e) { expect(e.message).to.include('503'); }
+        const record=JSON.parse(state['#sub-store-refresh-status-empty']);
+        expect(record.usedOldCache).to.equal(false);
+        expect(record.lastSuccessAt).to.equal(undefined);
+    });
+    it('does not treat a normal cache hit as a new remote success', async function () {
+        const url='https://example.com/cache#cacheKey=hit&trackStatus=true';
+        await download(url);
+        const before=JSON.parse(state['#sub-store-refresh-status-hit']);
+        await download(url);
+        const after=JSON.parse(state['#sub-store-refresh-status-hit']);
+        expect(capturedUrls).to.have.length(1);
+        expect(after.lastAttemptAt).to.equal(before.lastAttemptAt);
+        expect(after.lastSuccessAt).to.equal(before.lastSuccessAt);
+        expect(after.delivery).to.equal('memory');
+    });
     it('prefixes matching download urls with the github proxy', async function () {
         await download(
             'https://raw.githubusercontent.com/sub-store-org/Sub-Store/master/README.md',

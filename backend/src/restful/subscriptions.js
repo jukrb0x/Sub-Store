@@ -10,6 +10,7 @@ import {
     insertByPosition,
     updateByName,
 } from '@/utils/database';
+import { trackedSubscription } from '@/utils/refresh-status';
 import { getCreateItemPosition } from '@/utils/create-item-position';
 import {
     SUBS_KEY,
@@ -279,7 +280,7 @@ function getSubscription(req, res) {
                 )
                 .send(JSON.stringify(sub));
         } else {
-            success(res, sub);
+            success(res, trackedSubscription(sub));
         }
     } else {
         failed(
@@ -375,7 +376,7 @@ function deleteSubscription(req, res) {
 
 function getAllSubscriptions(req, res) {
     const allSubs = $.read(SUBS_KEY);
-    success(res, allSubs);
+    success(res, allSubs.map(trackedSubscription));
 }
 
 function replaceSubscriptions(req, res) {

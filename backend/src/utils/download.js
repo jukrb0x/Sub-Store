@@ -17,6 +17,7 @@ import PROXY_PREPROCESSORS from '@/core/proxy-utils/preprocessors';
 import { ProxyUtils } from '@/core/proxy-utils';
 import { runBackendRequestTask } from '@/utils/request-concurrency';
 import getFs from '@/runtime/fs';
+import { writeRefreshStatus, safeRefreshError } from '@/utils/refresh-status';
 import getStreamPromises from '@/runtime/stream-promises';
 import {
     AGE_SECRET_KEY,
@@ -216,7 +217,9 @@ export default async function download(
         ? `#sub-store-cached-custom-${$arguments?.cacheKey}`
         : undefined;
 
-    if (customCacheKey && !skipCustomCache) {
+    const trackedKey = customCacheKey && ($arguments.trackStatus === true || $arguments.trackStatus === 'true') ? $arguments.cacheKey : undefined;
+    const notifyRefresh = $arguments.notifyRefresh === true || $arguments.notifyRefresh === 'true';
+    if (customCacheKey && !skipCustomCache && !trackedKey) {
         const customCached = $.read(customCacheKey);
         const cached = resourceCache.get(id);
         if (!noCache && !$arguments?.noCache && cached) {
@@ -377,6 +380,7 @@ export default async function download(
                 customHeaders ? JSON.stringify(customHeaders) : userAgent
             }`,
         );
+        if (trackedKey) writeRefreshStatus(trackedKey, {delivery:"memory",usedOldCache:true});
         rawResult = cached;
         result = await finalizeDownloadedBody(cached, {
             ageSecretKey,
@@ -400,6 +404,7 @@ export default async function download(
                     : `User-Agent: ${userAgent}`
             }\nTimeout: ${requestTimeout}\nProxy: ${proxy}\nInsecure: ${!!insecure}\nPreprocess: ${preprocess}\nURL: ${safeUrl}`,
         );
+        if (trackedKey) writeRefreshStatus(trackedKey, {lastAttemptAt:Date.now(),lastAttemptResult:"pending",lastError:null,usedOldCache:null,delivery:"remote"});
         try {
             let { body, headers, statusCode } = await runBackendRequestTask(
                 () =>
@@ -437,6 +442,7 @@ export default async function download(
                 preprocess,
                 url: safeUrl,
             });
+            if (trackedKey && result.shouldCache === false) throw new Error("invalid subscription content");
             let shouldCache = true;
             if (cacheThreshold) {
                 const size = body.length / 1024;
@@ -469,8 +475,10 @@ export default async function download(
                 }
             }
 
+            if (trackedKey) writeRefreshStatus(trackedKey, {lastAttemptResult:"success",lastSuccessAt:Date.now(),lastError:null,usedOldCache:false,delivery:"remote",httpStatus:statusCode}, notifyRefresh);
             rawResult = body;
         } catch (e) {
+            if (trackedKey) writeRefreshStatus(trackedKey, {lastAttemptResult:"failed",lastError:safeRefreshError(e),usedOldCache:!!$.read(customCacheKey),delivery:$.read(customCacheKey)?"fallback":"none",httpStatus:null}, notifyRefresh);
             if (customCacheKey) {
                 const cached = $.read(customCacheKey);
                 if (cached) {
